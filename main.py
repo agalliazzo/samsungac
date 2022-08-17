@@ -15,7 +15,7 @@ from threading import Thread, Event
 from xml.etree import ElementTree
 from paho.mqtt import client
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Optional
 from abc import abstractmethod, ABC, abstractproperty
 from paho import mqtt
 import asyncio
@@ -41,6 +41,7 @@ class SamsungAirConditioner:
     ip_address: str
     nickname: str
     token: str
+    base_topic: Optional[str] = '/'
 
 
 class SamsungAirConditionerConfigParser(dict[str, SamsungAirConditioner]):
@@ -56,14 +57,14 @@ class SamsungAirConditionerConfigParser(dict[str, SamsungAirConditioner]):
             try:
                 acs = json.loads(raw_config)
             except Exception as e:
-                print(e)
+                logging.error("Exception parsing json file> %s" % e)
                 return
             for mac, ac in acs.items():
                 self[mac] = (SamsungAirConditioner(**ac))
 
     def save(self):
         with open(self._config_file, 'w') as f:
-            f.write(json.dumps(self, cls=EnhancedJSONEncoder))
+            f.write(json.dumps(self, cls=EnhancedJSONEncoder, indent=4))
 
 
 
@@ -124,7 +125,8 @@ class SamsungACPropertyList(dict[SamsungACProperty]):
         else:
             obj: SamsungACProperty = self[key]
             obj.value = value
-            print('Publishing %s to topic %s' % (obj.value, self._get_full_topic('Reply', obj)))
+
+            ('Publishing %s to topic %s' % (obj.value, self._get_full_topic('Reply', obj)))
             self._mqtt_client.publish(self._get_full_topic('Reply', obj), obj.value)
 
         if not already_exists and self._mqtt_client.is_connected():
@@ -255,10 +257,10 @@ class SamsungAC:
         type = el.attrib.get('Type', None)
         if type == 'GetToken':
             token = el.attrib.get('Token')
-            print("Token ricevuto: %s" % token)
+            logging.info("Tcken received: %s" % token)
+            self.token = token
             if self.on_token_received:
                 self.on_token_received(self.duid, token)
-            return
 
         for child in el.find('Status'):
             if child.tag == 'Attr':
@@ -272,7 +274,7 @@ class SamsungAC:
         """
         for child in el.find('DeviceState').find('Device'):
             if child.tag == 'Attr':
-                print(child.attrib['ID'], child.attrib['Value'], child.attrib['Type'])
+                logging.debug(child.attrib['ID'], child.attrib['Value'], child.attrib['Type'])
                 self.properties[child.attrib['ID']] = child.attrib['Value']
 
     def _send(self, data: bytes or str):
@@ -428,19 +430,24 @@ def on_token_received(ac, token):
     configured_devices.save()
 
 
+def create_interfaces():
+    acs = {}
+    for mac, device in configured_devices.items():
+        acs[device.nickname] = SamsungAC(ip_address=device.ip_address, duid=device.mac_address, token=device.token,
+                                         base_topic=device.base_topic, friendly_name=device.nickname)
+        acs[device.nickname].on_token_received = on_token_received
+
+    return acs, next(iter(acs.items()))[1]
+
+
 def interactive():
     """
     Interactive shell to run configuration stuff and testing
     :return:
     """
-    print('Total device in conf file: %s' % len(configured_devices))
+    logging.info('Total device in conf file: %s' % len(configured_devices))
 
-    acs = {}
-    for mac, device in configured_devices.items():
-        acs[device.nickname] = SamsungAC(ip_address=device.ip_address, duid=device.mac_address, token=device.token,
-                                         base_topic='/domoticV2/%s' % device.nickname, friendly_name=device.nickname)
-        acs[device.nickname].on_token_received = on_token_received
-        ac = acs[device.nickname]
+    acs, ac = create_interfaces()
 
     r = ''
     while r != 'q':
@@ -462,12 +469,8 @@ def interactive():
                 ac_name = input('Select: ')
             ac = acs[ac_name]
         if r == 'd':
-            update_configured_devices(configured_devices, acs)
-            for mac, device in configured_devices.items():
-                acs[device.nickname] = SamsungAC(ip_address=device.ip_address, duid=device.mac_address, token=device.token,
-                                                 base_topic='/domoticV2/%s' % device.nickname,
-                                                 friendly_name=device.nickname)
-                ac = acs[device.nickname]
+            update_configured_devices(configured_devices)
+            acs, ac = create_interfaces()
         if r == '1':
             ac.connect()
             info("Connected")
@@ -493,11 +496,20 @@ def automatic_run():
     Automatically start the system, connect to the air conditioner and start mqtt client
     :return:
     """
-    pass
+    #print('Total device in conf file: %s' % len(configured_devices))
+
+    acs, _ = create_interfaces()
+
+    for friendly_name, ac in acs.items():
+        logging.info("Connecting to AC %s" % friendly_name)
+        ac.connect()
 
 
 if __name__ == '__main__':
-    interactive()
+    if '-i' in sys.argv:
+        interactive()
+    else:
+        automatic_run()
 
 
     #parser = argparse.ArgumentParser(description='Samsung AC old mqtt interface (based on port 2787)')
