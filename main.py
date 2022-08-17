@@ -8,7 +8,6 @@ import xml.etree.ElementTree
 from socket import socket, AF_INET, SOCK_STREAM
 import ssl
 from ssl import SSLContext, SSLError
-from ssdpy import SSDPClient, SSDPServer
 from logging import info, warning, error, basicConfig
 from pprint import pprint
 from threading import Thread, Event
@@ -16,17 +15,14 @@ from xml.etree import ElementTree
 from paho.mqtt import client
 from dataclasses import dataclass
 from typing import Callable, Optional
-from abc import abstractmethod, ABC, abstractproperty
 from paho import mqtt
-import asyncio
 import socket
 from samsung_discovery import SamsungDiscovery
 import json
-import argparse
 
 basicConfig(level='INFO')
 
-# La password del wifi SMARTAIRCON è JUNGFRAU2011 non 111112222 come scritto nel manuale
+# Wifi password for the SMARTAIRCON network is  JUNGFRAU2011 not 111112222 as specified on the user manual
 
 
 class EnhancedJSONEncoder(json.JSONEncoder):
@@ -34,6 +30,7 @@ class EnhancedJSONEncoder(json.JSONEncoder):
         if dataclasses.is_dataclass(o):
             return dataclasses.asdict(o)
         return super().default(o)
+
 
 @dataclass
 class SamsungAirConditioner:
@@ -65,7 +62,6 @@ class SamsungAirConditionerConfigParser(dict[str, SamsungAirConditioner]):
     def save(self):
         with open(self._config_file, 'w') as f:
             f.write(json.dumps(self, cls=EnhancedJSONEncoder, indent=4))
-
 
 
 @dataclass
@@ -430,7 +426,11 @@ def on_token_received(ac, token):
     configured_devices.save()
 
 
-def create_interfaces():
+def create_interfaces() -> ({str, SamsungAirConditioner}, SamsungAC):
+    """
+    Create a dictionary of SamsungAC objects from the configured file
+    :return: A dictionary of SamsungAC objects and the first element of the dictionary
+    """
     acs = {}
     for mac, device in configured_devices.items():
         acs[device.nickname] = SamsungAC(ip_address=device.ip_address, duid=device.mac_address, token=device.token,
