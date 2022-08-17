@@ -434,7 +434,8 @@ def create_interfaces() -> ({str, SamsungAirConditioner}, SamsungAC):
     acs = {}
     for mac, device in configured_devices.items():
         acs[device.nickname] = SamsungAC(ip_address=device.ip_address, duid=device.mac_address, token=device.token,
-                                         base_topic=device.base_topic, friendly_name=device.nickname)
+                                         base_topic=device.base_topic, friendly_name=device.nickname,
+                                         mqtt_broker='mqtt.agalliazzo.com')
         acs[device.nickname].on_token_received = on_token_received
 
     return acs, next(iter(acs.items()))[1]
