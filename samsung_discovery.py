@@ -6,6 +6,7 @@ import time
 from threading import Thread
 import select
 
+
 class SamsungDiscovery:
     MCAST_GRP = '239.255.255.250'
     MCAST_PORT = 1900

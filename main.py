@@ -8,7 +8,8 @@ import xml.etree.ElementTree
 from socket import socket, AF_INET, SOCK_STREAM
 import ssl
 from ssl import SSLContext, SSLError
-from logging import info, warning, error, basicConfig
+#from logging import info, warning, error, basicConfig
+import logging
 from pprint import pprint
 from threading import Thread, Event
 from xml.etree import ElementTree
@@ -19,8 +20,9 @@ from paho import mqtt
 import socket
 from samsung_discovery import SamsungDiscovery
 import json
+import select
 
-basicConfig(level='INFO')
+logging.basicConfig(level='INFO')
 
 # Wifi password for the SMARTAIRCON network is  JUNGFRAU2011 not 111112222 as specified on the user manual
 
@@ -101,6 +103,7 @@ class SamsungACPropertyList(dict[SamsungACProperty]):
         pass
 
     def _on_mqtt_message(self, client, userdata, msg):
+        logging.info("Data received on topic %s: %s" % (msg.topic, msg.payload))
         topic_splitted = msg.topic.split('/')
         property_id = topic_splitted[-1]
         property = self.get(property_id, None)
@@ -122,7 +125,7 @@ class SamsungACPropertyList(dict[SamsungACProperty]):
             obj: SamsungACProperty = self[key]
             obj.value = value
 
-            ('Publishing %s to topic %s' % (obj.value, self._get_full_topic('Reply', obj)))
+            logging.info('Publishing %s to topic %s' % (obj.value, self._get_full_topic('Reply', obj)))
             self._mqtt_client.publish(self._get_full_topic('Reply', obj), obj.value)
 
         if not already_exists and self._mqtt_client.is_connected():
@@ -172,15 +175,15 @@ class SamsungAC:
         self.IsConnected = False
         self.duid = duid
         self.token = token
-        friendly_name = friendly_name or duid
+        self.friendly_name = friendly_name or duid
         base_topic = base_topic if base_topic[:-1] == '/' else base_topic + '/'
         self.properties = SamsungACPropertyList(mqtt_broker, self.mqtt_prop_change_request,
-                                                base_topic + friendly_name)
+                                                base_topic + self.friendly_name)
         self.properties += SamsungACProperty('AC_FUN_ENABLE', 'RW')
         self.properties += SamsungACProperty('AC_FUN_POWER')
         self.properties += SamsungACProperty('AC_FUN_SUPPORTED')
         self.properties += SamsungACProperty('AC_FUN_OPMODE')
-        self.properties += SamsungACProperty('AC_FUN_TEMPSET')
+        self.properties += SamsungACProperty('AC_FUN_TEMPSET', data_type=int)
         self.properties += SamsungACProperty('AC_FUN_COMODE')
         self.properties += SamsungACProperty('AC_FUN_ERROR')
         self.properties += SamsungACProperty('AC_FUN_TEMPNOW')
@@ -207,7 +210,7 @@ class SamsungAC:
         self.on_token_received: Callable = None
 
     def mqtt_prop_change_request(self, prop: SamsungACProperty):
-        info("MQTT prop change requested for property %s" % prop)
+        logging.info("%s: MQTT prop change requested for property %s" % (self.friendly_name, prop))
         self._device_control(prop.samsung_property, prop.value)
 
     def check_resp(self, element, resp):
@@ -222,15 +225,19 @@ class SamsungAC:
         :return:
         """
         while not self.exitThread.is_set():
-            data = self.ssl_socket.read(len=2048)
+            ready = select.select([self.ssl_socket], [], [], 1)
+            if ready[0]:
+                data = self.ssl_socket.read(len=2048)
+            else:
+                continue
             if b'DRC-1.00' in data:
                 continue
-            logging.debug("Received: %s" % data)
+            logging.debug("%s: Received: %s" % (self.friendly_name, data))
             tree = ElementTree.ElementTree(ElementTree.fromstring(data))
             root = tree.getroot()
             if root.tag == 'Update':
                 if root.attrib['Type'] == 'InvalidateAccount':
-                    logging.info("Not yet authenticated... proceeding with login...")
+                    logging.info("%s: Not yet authenticated... proceeding with login..." % self.friendly_name)
                     self.login()
                 else:
                     # TODO: Check how to merge in a whole function, something is strange in here about how I wrote this
@@ -253,7 +260,7 @@ class SamsungAC:
         type = el.attrib.get('Type', None)
         if type == 'GetToken':
             token = el.attrib.get('Token')
-            logging.info("Tcken received: %s" % token)
+            logging.info("%s: Token received: %s" % (self.friendly_name, token))
             self.token = token
             if self.on_token_received:
                 self.on_token_received(self.duid, token)
@@ -281,8 +288,13 @@ class SamsungAC:
         """
         if isinstance(data, str):
             data = str.encode(data)
-        info("Sending: %s" % data)
-        self.ssl_socket.write(data + b"\r\n")
+        logging.info("%s: Sending: %s" % (self.friendly_name, data) )
+        try:
+            self.ssl_socket.write(data + b"\r\n")
+        except ssl.SSLEOFError:
+            logging.error("%s: SSL protocol violation, trying to reconnect" % self.friendly_name)
+            self.disconnect()
+            self.connect()
 
     def _device_control(self, key, value):
         """
@@ -297,6 +309,11 @@ class SamsungAC:
             (id, self.duid, key, value)
         )
 
+    def disconnect(self):
+        self.ssl_socket.disconnect()
+        self.IsConnected = False
+        self.exitThread.set()
+
     def connect(self):
         """
         Connect to the air conditioner
@@ -309,14 +326,18 @@ class SamsungAC:
         self.ssl_context = SSLContext(protocol=ssl.PROTOCOL_SSLv23)
         self.ssl_context.options &= ~(ssl.OP_NO_SSLv3 | ssl.OP_NO_SSLv2)
         self.ssl_socket = ssl.wrap_socket(self.socket, ssl_version=ssl.PROTOCOL_TLSv1, ciphers='DEFAULT:!DH')
+        #TODO: Manage errors...
         try:
             self.ssl_socket.connect((self.IPAddress, self.port))
+            self.exitThread.clear()
             self.listeningThread.start()
-            info("Connected to %s" % self.IPAddress)
+            logging.info("%s: Connected to %s" % (self.friendly_name, self.IPAddress))
             self.IsConnected = True
             return
         except SSLError as err:
-            error(err)
+            logging.error('%s: %s' % (self.friendly_name, err))
+        except TimeoutError as err:
+            logging.error('%s: %s' % (self.friendly_name, err))
         self.IsConnected = False
 
     def get_token(self):
@@ -330,7 +351,7 @@ class SamsungAC:
         """
         self.connect()
         self._send(b'<Request Type="GetToken"/>')
-        info('Request sent')
+        logging.info('%s: Token request sent' % self.friendly_name)
 
     def login(self):
         """
