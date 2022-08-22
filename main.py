@@ -125,7 +125,7 @@ class SamsungACPropertyList(dict[SamsungACProperty]):
             obj: SamsungACProperty = self[key]
             obj.value = value
 
-            logging.info('Publishing %s to topic %s' % (obj.value, self._get_full_topic('Reply', obj)))
+            logging.debug('Publishing %s to topic %s' % (obj.value, self._get_full_topic('Reply', obj)))
             self._mqtt_client.publish(self._get_full_topic('Reply', obj), obj.value)
 
         if not already_exists and self._mqtt_client.is_connected():
@@ -291,8 +291,8 @@ class SamsungAC:
         logging.info("%s: Sending: %s" % (self.friendly_name, data) )
         try:
             self.ssl_socket.write(data + b"\r\n")
-        except ssl.SSLEOFError:
-            logging.error("%s: SSL protocol violation, trying to reconnect" % self.friendly_name)
+        except (ssl.SSLEOFError, ValueError) as err:
+            logging.error("%s: SSL protocol violation (%s), trying to reconnect" % (self.friendly_name, err))
             self.disconnect()
             self.connect()
 
@@ -310,7 +310,11 @@ class SamsungAC:
         )
 
     def disconnect(self):
-        self.ssl_socket.disconnect()
+        if self.IsConnected:
+            try:
+                self.ssl_socket.disconnect()
+            except SSLError as err:
+                logging.warning("%s: Error disconnecting: %s" % (self.friendly_name, err))
         self.IsConnected = False
         self.exitThread.set()
 
@@ -326,7 +330,7 @@ class SamsungAC:
         self.ssl_context = SSLContext(protocol=ssl.PROTOCOL_SSLv23)
         self.ssl_context.options &= ~(ssl.OP_NO_SSLv3 | ssl.OP_NO_SSLv2)
         self.ssl_socket = ssl.wrap_socket(self.socket, ssl_version=ssl.PROTOCOL_TLSv1, ciphers='DEFAULT:!DH')
-        #TODO: Manage errors...
+        #TODO: Manage errors better?
         try:
             self.ssl_socket.connect((self.IPAddress, self.port))
             self.exitThread.clear()
@@ -334,9 +338,7 @@ class SamsungAC:
             logging.info("%s: Connected to %s" % (self.friendly_name, self.IPAddress))
             self.IsConnected = True
             return
-        except SSLError as err:
-            logging.error('%s: %s' % (self.friendly_name, err))
-        except TimeoutError as err:
+        except (SSLError, TimeoutError, ConnectionResetError) as err:
             logging.error('%s: %s' % (self.friendly_name, err))
         self.IsConnected = False
 
