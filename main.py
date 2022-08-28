@@ -9,25 +9,24 @@ import xml.etree.ElementTree
 from socket import socket, AF_INET, SOCK_STREAM
 import ssl
 from ssl import SSLContext, SSLError, SSLSocket
-from pprint import pprint
 from threading import Thread, Event
 from xml.etree import ElementTree
-from paho.mqtt import client
 from dataclasses import dataclass
-from typing import Callable, Optional
-from paho import mqtt
 import socket
-from samsung_discovery import SamsungDiscovery
+from typing import Callable, Optional
 import json
 import select
+from paho import mqtt
+from samsung_discovery import SamsungDiscovery
 
 logging.basicConfig(
     level='INFO',
-    format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+    format='%(asctime)s.%(msecs)03d %(levelname)s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-# Wifi password for the SMARTAIRCON network is  JUNGFRAU2011 not 111112222 as specified on the user manual
+# Wifi password for the SMARTAIRCON network is JUNGFRAU2011 not 111112222 as
+# specified on the user manual
 
 
 class EnhancedJSONEncoder(json.JSONEncoder):
@@ -59,7 +58,7 @@ class SamsungAirConditionerConfigParser(dict[str, SamsungAirConditioner]):
             try:
                 acs = json.loads(raw_config)
             except Exception as e:
-                logging.error("Exception parsing json file> %s" % e)
+                logging.error("Exception parsing json file> %s", e)
                 return
             for mac, ac in acs.items():
                 self[mac] = (SamsungAirConditioner(**ac))
@@ -85,7 +84,8 @@ class SamsungACPropertyList(dict[SamsungACProperty]):
     """
     Manage the properties for the air conditioner.
     """
-    def __init__(self, mqtt_server: str, prop_changed_callback: Callable = None, base_topic: str = '/AC/'):
+    def __init__(self, mqtt_server: str, prop_changed_callback: Callable = None,
+                 base_topic: str = '/AC/'):
         self._base_topic: str = base_topic if base_topic[-1] != '/' else base_topic[:-1]
         self._mqtt_client: mqtt.client.Client = mqtt.client.Client()
         self._mqtt_server: str = mqtt_server
@@ -106,7 +106,7 @@ class SamsungACPropertyList(dict[SamsungACProperty]):
         pass
 
     def _on_mqtt_message(self, client, userdata, msg):
-        logging.info("Data received on topic %s: %s" % (msg.topic, msg.payload))
+        logging.info("Data received on topic %s: %s", msg.topic, msg.payload)
         topic_splitted = msg.topic.split('/')
         property_id = topic_splitted[-1]
         property = self.get(property_id, None)
@@ -128,7 +128,10 @@ class SamsungACPropertyList(dict[SamsungACProperty]):
             obj: SamsungACProperty = self[key]
             obj.value = value
 
-            logging.debug('Publishing %s to topic %s' % (obj.value, self._get_full_topic('Reply', obj)))
+            logging.debug('Publishing %s to topic %s',
+                          obj.value,
+                          self._get_full_topic('Reply', obj)
+                          )
             self._mqtt_client.publish(self._get_full_topic('Reply', obj), obj.value)
 
         if not already_exists and self._mqtt_client.is_connected():
@@ -149,6 +152,8 @@ class SamsungACPropertyList(dict[SamsungACProperty]):
 
 
 class SamsungAC:
+    # pylint: disable=too-many-arguments,too-many-instance-attributes
+
     """
     General class to connect to an air conditioner
     """
@@ -156,6 +161,7 @@ class SamsungAC:
                         'WindMode3']
     work_modes = ['Auto', 'Cool', 'Dry', 'Wind', 'Heat']
     wind_modes = ['Auto', 'Low', 'Mid', 'High', 'Turbo']
+
 
     def __init__(self, ip_address: str, duid, token='', base_topic: str = '/AC/', friendly_name: str = None,
                  mqtt_broker: str = 'mqtt.agalliazzo.com'):
@@ -170,12 +176,12 @@ class SamsungAC:
         :param mqtt_broker: MQTT broker address (or FQDN) where to publish and subscribe
         """
         # Network interface
-        self.IPAddress: str = ip_address
+        self.ip_address: str = ip_address
         self.port: int = 2878
         self.socket: socket.socket = None
         self.ssl_socket: SSLSocket = None
         self.ssl_context: SSLContext = None
-        self.IsConnected: bool = False
+        self.is_connected: bool = False
         self.duid: str = duid
         self.token: str = token
         self.friendly_name: str = friendly_name or duid
@@ -208,15 +214,26 @@ class SamsungAC:
         self.properties += SamsungACProperty('AC_SG_VENDER03')
         self.properties.mqtt_connect()
         # Listener
-        self.exitThread = Event()
-        self.listeningThread = Thread(target=self.listener)
+        self.exit_thread = Event()
+        self.listening_thread = Thread(target=self.listener)
         self.on_token_received: Callable = None
 
     def mqtt_prop_change_request(self, prop: SamsungACProperty):
-        logging.info("%s: MQTT prop change requested for property %s" % (self.friendly_name, prop))
+        """
+        Execute a property change on remote request
+        :param prop: property to be changed
+        :return:
+        """
+        logging.info("%s: MQTT prop change requested for property %s", self.friendly_name, prop)
         self._device_control(prop.samsung_property, prop.value)
 
-    def check_resp(self, element, resp):
+    def check_resp(self, element, resp) -> bool:
+        """
+        Check if response from the AC is a response type equal to resp
+        :param element: XML element to check
+        :param resp: response
+        :return: True if resp match the element
+        """
         if element.attrib['Type'] == resp and element.attrib['Status'] == 'Okay':
             return True
         return False
@@ -227,7 +244,7 @@ class SamsungAC:
         TODO: Use select to poll the socket, this is blocking and is not beautiful
         :return:
         """
-        while not self.exitThread.is_set():
+        while not self.exit_thread.is_set():
             ready = select.select([self.ssl_socket], [], [], 1)
             if ready[0]:
                 data = self.ssl_socket.read(len=2048)
@@ -235,12 +252,12 @@ class SamsungAC:
                 continue
             if b'DRC-1.00' in data:
                 continue
-            logging.debug("%s: Received: %s" % (self.friendly_name, data))
+            logging.debug("%s: Received: %s", self.friendly_name, data)
             tree = ElementTree.ElementTree(ElementTree.fromstring(data))
             root = tree.getroot()
             if root.tag == 'Update':
                 if root.attrib['Type'] == 'InvalidateAccount':
-                    logging.info("%s: Not yet authenticated... proceeding with login..." % self.friendly_name)
+                    logging.info("%s: Not yet authenticated... proceeding with login...", self.friendly_name)
                     self.login()
                 else:
                     # TODO: Check how to merge in a whole function, something is strange in here about how I wrote this
@@ -254,31 +271,31 @@ class SamsungAC:
                 if self.check_resp(root, 'DeviceState'):
                     self.parse_status(root)
 
-    def parse_update(self, el: xml.etree.ElementTree.Element):
+    def parse_update(self, xml_element: xml.etree.ElementTree.Element):
         """
         Process and update command from the air conditioner
-        :param el: xml received element
+        :param xml_element: xml received element
         :return:
         """
-        type = el.attrib.get('Type', None)
-        if type == 'GetToken':
-            token = el.attrib.get('Token')
-            logging.info("%s: Token received: %s" % (self.friendly_name, token))
+        resp_type = xml_element.attrib.get('Type', None)
+        if resp_type == 'GetToken':
+            token = xml_element.attrib.get('Token')
+            logging.info("%s: Token received: %s",self.friendly_name, token)
             self.token = token
             if self.on_token_received:
                 self.on_token_received(self.duid, token)
 
-        for child in el.find('Status'):
+        for child in xml_element.find('Status'):
             if child.tag == 'Attr':
                 self.properties[child.attrib['ID']] = child.attrib['Value']
 
-    def parse_status(self, el: xml.etree.ElementTree.Element):
+    def parse_status(self, element: xml.etree.ElementTree.Element):
         """
         Process a DeviceStatus "command" from the air conditioner
-        :param el: xml received element
+        :param element: xml received element
         :return:
         """
-        for child in el.find('DeviceState').find('Device'):
+        for child in element.find('DeviceState').find('Device'):
             if child.tag == 'Attr':
                 logging.debug(child.attrib['ID'], child.attrib['Value'], child.attrib['Type'])
                 self.properties[child.attrib['ID']] = child.attrib['Value']
@@ -291,13 +308,13 @@ class SamsungAC:
         """
         if isinstance(data, str):
             data = str.encode(data)
-        logging.info("%s: Sending: %s" % (self.friendly_name, data) )
+        logging.info("%s: Sending: %s", self.friendly_name, data)
         try:
             self.ssl_socket.write(data + b"\r\n")
         except (ssl.SSLEOFError, ValueError) as err:
-            logging.error("%s: SSL protocol violation (%s), trying to reconnect" % (self.friendly_name, err))
+            logging.error("%s: SSL protocol violation (%s), trying to reconnect", self.friendly_name, err)
             self.disconnect()
-            self.connect()
+            #self.connect()
 
     def _device_control(self, key, value):
         """
@@ -306,27 +323,33 @@ class SamsungAC:
         :param value: new value
         :return:
         """
-        id = random.randint(0, 10000)
-        self._send(
-            '<Request Type="DeviceControl"><Control CommandID="cmd%s" DUID="%s"><Attr ID="%s" Value="%s" /></Control></Request>' %
-            (id, self.duid, key, value)
-        )
+        msg_id = random.randint(0, 10000)
+        self._send(f'<Request Type="DeviceControl">'
+                   f'<Control CommandID="cmd{msg_id}" DUID="{self.duid}">'
+                   f'<Attr ID="{key}" Value="{value}" />'
+                   f'</Control>'
+                   f'</Request>'
+                   )
 
     def disconnect(self):
-        if self.IsConnected:
+        """
+        Disconnect the socket from the AC
+        :return:
+        """
+        if self.is_connected:
             try:
                 self.ssl_socket.close()
             except SSLError as err:
-                logging.warning("%s: Error disconnecting: %s" % (self.friendly_name, err))
-        self.IsConnected = False
-        self.exitThread.set()
+                logging.warning("%s: Error disconnecting: %s", self.friendly_name, err)
+        self.is_connected = False
+        self.exit_thread.set()
 
     def connect(self):
         """
         Connect to the air conditioner
         :return:
         """
-        if self.IsConnected:
+        if self.is_connected:
             return
 
         self.socket = socket.socket(AF_INET, SOCK_STREAM)
@@ -335,17 +358,17 @@ class SamsungAC:
         self.ssl_socket = ssl.wrap_socket(self.socket, ssl_version=ssl.PROTOCOL_TLSv1, ciphers='DEFAULT:!DH')
         #TODO: Manage errors better?
         try:
-            self.ssl_socket.connect((self.IPAddress, self.port))
-            self.exitThread.clear()
-            self.listeningThread.start()
-            logging.info("%s: Connected to %s" % (self.friendly_name, self.IPAddress))
-            self.IsConnected = True
+            self.ssl_socket.connect((self.ip_address, self.port))
+            self.exit_thread.clear()
+            self.listening_thread.start()
+            logging.info("%s: Connected to %s", self.friendly_name, self.ip_address)
+            self.is_connected = True
             return
         except (SSLError, TimeoutError, ConnectionResetError) as err:
             logging.error('%s: %s', self.friendly_name, err)
             logging.error('%s: %s', self.friendly_name, traceback.format_exc())
 
-        self.IsConnected = False
+        self.is_connected = False
 
     def get_token(self):
         """
@@ -358,7 +381,7 @@ class SamsungAC:
         """
         self.connect()
         self._send(b'<Request Type="GetToken"/>')
-        logging.info('%s: Token request sent' % self.friendly_name)
+        logging.info('%s: Token request sent', self.friendly_name)
 
     def login(self):
         """
@@ -372,7 +395,7 @@ class SamsungAC:
         Get the AC current status (list all the properties)
         :return:
         """
-        self._send('<Request Type="DeviceState" DUID="%s"></Request>' %  self.duid )
+        self._send(f'<Request Type="DeviceState" DUID="{self.duid}"></Request>')
 
     def turn_on(self):
         """
@@ -443,14 +466,14 @@ def update_configured_devices(configured_devices: SamsungAirConditionerConfigPar
 configured_devices = SamsungAirConditionerConfigParser()
 
 
-def on_token_received(ac, token):
+def on_token_received(air_conditioner, token):
     """
     Callback to update the configured devices once the token is received
-    :param ac: MAC address (index of the configuration dict) for the air conditioner
+    :param air_conditioner: MAC address (index of the configuration dict) for the air conditioner
     :param token: Token received
     :return:
     """
-    configured_devices[ac].token = token
+    configured_devices[air_conditioner].token = token
     configured_devices.save()
 
 
@@ -460,7 +483,7 @@ def create_interfaces() -> ({str, SamsungAirConditioner}, SamsungAC):
     :return: A dictionary of SamsungAC objects and the first element of the dictionary
     """
     acs = {}
-    for mac, device in configured_devices.items():
+    for _, device in configured_devices.items():
         acs[device.nickname] = SamsungAC(ip_address=device.ip_address, duid=device.mac_address, token=device.token,
                                          base_topic=device.base_topic, friendly_name=device.nickname,
                                          mqtt_broker='mqtt.agalliazzo.com')
@@ -474,12 +497,12 @@ def interactive():
     Interactive shell to run configuration stuff and testing
     :return:
     """
-    logging.info('Total device in conf file: %s' % len(configured_devices))
+    logging.info('Total device in conf file: %s', len(configured_devices))
 
-    acs, ac = create_interfaces()
+    air_conditioners, air_conditioner = create_interfaces()
 
-    r = ''
-    while r != 'q':
+    choice = ''
+    while choice != 'q':
         print('s: Select AC')
         print('d: Start discovery of ACs')
         print('1: Connect')
@@ -490,50 +513,55 @@ def interactive():
         print('6: set temperature')
         print('7: set fan')
         print('q: Exit')
-        r = input('Choose the command: ')
-        if r == 's':
-            pprint('Available ACs: %s' % acs.keys())
+        choice = input('Choose the command: ')
+        if choice == 's':
+            print(f'Available ACs: {air_conditioners.keys()}')
             ac_name = ''
-            while ac_name not in acs.keys():
+            while ac_name not in air_conditioners.keys():
                 ac_name = input('Select: ')
-            ac = acs[ac_name]
-        if r == 'd':
+            air_conditioner = air_conditioners[ac_name]
+        if choice == 'd':
             update_configured_devices(configured_devices)
-            acs, ac = create_interfaces()
-        if r == '1':
-            ac.connect()
+            air_conditioners, air_conditioner = create_interfaces()
+        if choice == '1':
+            air_conditioner.connect()
             logging.info("Connected")
-        if r == '2':
-            ac.turn_off()
-        if r == '3':
-            ac.turn_on()
-        if r == '4':
-            ac.get_status()
-        if r == '5':
-            ac.get_token()
-        if r == '6':
-            r = input('Which temperature? ')
-            ac.set_temperature(int(r))
+        if choice == '2':
+            air_conditioner.turn_off()
+        if choice == '3':
+            air_conditioner.turn_on()
+        if choice == '4':
+            air_conditioner.get_status()
+        if choice == '5':
+            air_conditioner.get_token()
+        if choice == '6':
+            choice = input('Which temperature? ')
+            air_conditioner.set_temperature(int(choice))
 
-        if r == '7':
-            r = input('Which fan (%s)? ' % SamsungAC.wind_modes)
-            ac.set_windmode(r)
+        if choice == '7':
+            choice = input('Which fan (%s)? ' % SamsungAC.wind_modes)
+            air_conditioner.set_windmode(choice)
 
 
 exit_ac_threads = Event()
 
 
-def ac_worker_thread(ac: SamsungAC):
+def ac_worker_thread(air_conditioner: SamsungAC):
+    """
+    Worker thread to manage AC connection
+    :param air_conditioner: SamsungAC object to manage
+    :return:
+    """
     thread_state: int = 0
     while not exit_ac_threads.is_set():
         match thread_state:
             case 0:
-                logging.info("Connecting to AC %s" % ac.friendly_name)
-                ac.connect()
+                logging.info("Connecting to AC %s", air_conditioner.friendly_name)
+                air_conditioner.connect()
                 thread_state += 1
             case 1:
-                if not ac.IsConnected:
-                    logging.error("Fail to connect to AC %s", ac.friendly_name)
+                if not air_conditioner.is_connected:
+                    logging.error("Fail to connect to AC %s", air_conditioner.friendly_name)
                     logging.info("Retrying connection in 5s")
                     time.sleep(5)
                     thread_state = 0
@@ -541,6 +569,8 @@ def ac_worker_thread(ac: SamsungAC):
                 thread_state += 1
             case 2:
                 time.sleep(5)
+                if not air_conditioner.is_connected:
+                    thread_state = 0
 
 
 def automatic_run():
@@ -552,9 +582,9 @@ def automatic_run():
 
     acs, _ = create_interfaces()
 
-    for friendly_name, ac in acs.items():
-        t = Thread(target=ac_worker_thread, args=[ac])
-        t.start()
+    for _, air_conditioner in acs.items():
+        worker_thread = Thread(target=ac_worker_thread, args=[air_conditioner])
+        worker_thread.start()
 
 
 if __name__ == '__main__':
