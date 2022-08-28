@@ -16,7 +16,8 @@ import socket
 from typing import Callable, Optional
 import json
 import select
-from paho import mqtt
+import paho
+import paho.mqtt.client as mqtt
 from samsung_discovery import SamsungDiscovery
 
 logging.basicConfig(
@@ -87,7 +88,7 @@ class SamsungACPropertyList(dict[SamsungACProperty]):
     def __init__(self, mqtt_server: str, prop_changed_callback: Callable = None,
                  base_topic: str = '/AC/'):
         self._base_topic: str = base_topic if base_topic[-1] != '/' else base_topic[:-1]
-        self._mqtt_client: mqtt.client.Client = mqtt.client.Client()
+        self._mqtt_client: mqtt.Client = mqtt.Client()
         self._mqtt_server: str = mqtt_server
         self._prop_changed_callback: Callable = prop_changed_callback
 
