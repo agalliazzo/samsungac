@@ -1,5 +1,6 @@
 import dataclasses
 import logging
+import traceback
 import sys
 import os.path
 import random
@@ -7,9 +8,7 @@ import time
 import xml.etree.ElementTree
 from socket import socket, AF_INET, SOCK_STREAM
 import ssl
-from ssl import SSLContext, SSLError
-#from logging import info, warning, error, basicConfig
-import logging
+from ssl import SSLContext, SSLError, SSLSocket
 from pprint import pprint
 from threading import Thread, Event
 from xml.etree import ElementTree
@@ -22,7 +21,11 @@ from samsung_discovery import SamsungDiscovery
 import json
 import select
 
-logging.basicConfig(level='INFO')
+logging.basicConfig(
+    level='INFO',
+    format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 # Wifi password for the SMARTAIRCON network is  JUNGFRAU2011 not 111112222 as specified on the user manual
 
@@ -167,17 +170,17 @@ class SamsungAC:
         :param mqtt_broker: MQTT broker address (or FQDN) where to publish and subscribe
         """
         # Network interface
-        self.IPAddress = ip_address
-        self.port = 2878
-        self.socket = None
-        self.ssl_socket = None
-        self.ssl_context = None
-        self.IsConnected = False
-        self.duid = duid
-        self.token = token
-        self.friendly_name = friendly_name or duid
+        self.IPAddress: str = ip_address
+        self.port: int = 2878
+        self.socket: socket.socket = None
+        self.ssl_socket: SSLSocket = None
+        self.ssl_context: SSLContext = None
+        self.IsConnected: bool = False
+        self.duid: str = duid
+        self.token: str = token
+        self.friendly_name: str = friendly_name or duid
         base_topic = base_topic if base_topic[:-1] == '/' else base_topic + '/'
-        self.properties = SamsungACPropertyList(mqtt_broker, self.mqtt_prop_change_request,
+        self.properties: SamsungACPropertyList = SamsungACPropertyList(mqtt_broker, self.mqtt_prop_change_request,
                                                 base_topic + self.friendly_name)
         self.properties += SamsungACProperty('AC_FUN_ENABLE', 'RW')
         self.properties += SamsungACProperty('AC_FUN_POWER')
@@ -312,7 +315,7 @@ class SamsungAC:
     def disconnect(self):
         if self.IsConnected:
             try:
-                self.ssl_socket.disconnect()
+                self.ssl_socket.close()
             except SSLError as err:
                 logging.warning("%s: Error disconnecting: %s" % (self.friendly_name, err))
         self.IsConnected = False
@@ -339,7 +342,9 @@ class SamsungAC:
             self.IsConnected = True
             return
         except (SSLError, TimeoutError, ConnectionResetError) as err:
-            logging.error('%s: %s' % (self.friendly_name, err))
+            logging.error('%s: %s', self.friendly_name, err)
+            logging.error('%s: %s', self.friendly_name, traceback.format_exc())
+
         self.IsConnected = False
 
     def get_token(self):
@@ -497,7 +502,7 @@ def interactive():
             acs, ac = create_interfaces()
         if r == '1':
             ac.connect()
-            info("Connected")
+            logging.info("Connected")
         if r == '2':
             ac.turn_off()
         if r == '3':
@@ -515,6 +520,29 @@ def interactive():
             ac.set_windmode(r)
 
 
+exit_ac_threads = Event()
+
+
+def ac_worker_thread(ac: SamsungAC):
+    thread_state: int = 0
+    while not exit_ac_threads.is_set():
+        match thread_state:
+            case 0:
+                logging.info("Connecting to AC %s" % ac.friendly_name)
+                ac.connect()
+                thread_state += 1
+            case 1:
+                if not ac.IsConnected:
+                    logging.error("Fail to connect to AC %s", ac.friendly_name)
+                    logging.info("Retrying connection in 5s")
+                    time.sleep(5)
+                    thread_state = 0
+                    continue
+                thread_state += 1
+            case 2:
+                time.sleep(5)
+
+
 def automatic_run():
     """
     Automatically start the system, connect to the air conditioner and start mqtt client
@@ -525,8 +553,8 @@ def automatic_run():
     acs, _ = create_interfaces()
 
     for friendly_name, ac in acs.items():
-        logging.info("Connecting to AC %s" % friendly_name)
-        ac.connect()
+        t = Thread(target=ac_worker_thread, args=[ac])
+        t.start()
 
 
 if __name__ == '__main__':
