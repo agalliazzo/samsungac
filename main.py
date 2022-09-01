@@ -312,7 +312,7 @@ class SamsungAC:
         logging.info("%s: Sending: %s", self.friendly_name, data)
         try:
             self.ssl_socket.write(data + b"\r\n")
-        except (ssl.SSLEOFError, ValueError) as err:
+        except (ssl.SSLEOFError, ValueError, ssl.SSLError) as err:
             logging.error("%s: SSL protocol violation (%s), trying to reconnect", self.friendly_name, err)
             self.disconnect()
             #self.connect()
