@@ -490,6 +490,8 @@ def create_interfaces() -> ({str, SamsungAirConditioner}, SamsungAC):
                                          mqtt_broker='mqtt.agalliazzo.com')
         acs[device.nickname].on_token_received = on_token_received
 
+    if len(acs) == 0:
+        return acs, None
     return acs, next(iter(acs.items()))[1]
 
 
@@ -582,6 +584,12 @@ def automatic_run():
     #print('Total device in conf file: %s' % len(configured_devices))
 
     acs, _ = create_interfaces()
+
+    if len(acs) == 0:
+        logging.warning('No AC are found in configuration, please run main.py -i and choose option d) for perform a '
+                        'discovery and restart the container')
+        while True:
+            time.sleep(1)
 
     for _, air_conditioner in acs.items():
         worker_thread = Thread(target=ac_worker_thread, args=[air_conditioner])
