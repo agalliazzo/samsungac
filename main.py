@@ -254,23 +254,26 @@ class SamsungAC:
             if b'DRC-1.00' in data:
                 continue
             logging.debug("%s: Received: %s", self.friendly_name, data)
-            tree = ElementTree.ElementTree(ElementTree.fromstring(data))
-            root = tree.getroot()
-            if root.tag == 'Update':
-                if root.attrib['Type'] == 'InvalidateAccount':
-                    logging.info("%s: Not yet authenticated... proceeding with login...", self.friendly_name)
-                    self.login()
-                else:
-                    # TODO: Check how to merge in a whole function, something is strange in here about how I wrote this
-                    self.parse_update(root)
+            try:
+                tree = ElementTree.ElementTree(ElementTree.fromstring(data))
+                root = tree.getroot()
+                if root.tag == 'Update':
+                    if root.attrib['Type'] == 'InvalidateAccount':
+                        logging.info("%s: Not yet authenticated... proceeding with login...", self.friendly_name)
+                        self.login()
+                    else:
+                        # TODO: Check how to merge in a whole function, something is strange in here about how I wrote this
+                        self.parse_update(root)
 
-            if root.tag == 'Response':
-                if self.check_resp(root, 'AuthToken'):
-                    #login sucessfull
-                    self.get_status()
+                if root.tag == 'Response':
+                    if self.check_resp(root, 'AuthToken'):
+                        #login sucessfull
+                        self.get_status()
 
-                if self.check_resp(root, 'DeviceState'):
-                    self.parse_status(root)
+                    if self.check_resp(root, 'DeviceState'):
+                        self.parse_status(root)
+            except Exception as exc:
+                logging.error("%s: Error: %s", self.friendly_name, exc)
 
     def parse_update(self, xml_element: xml.etree.ElementTree.Element):
         """
@@ -361,6 +364,7 @@ class SamsungAC:
         try:
             self.ssl_socket.connect((self.ip_address, self.port))
             self.exit_thread.clear()
+            self.listening_thread = Thread(target=self.listener)
             self.listening_thread.start()
             logging.info("%s: Connected to %s", self.friendly_name, self.ip_address)
             self.is_connected = True
@@ -565,8 +569,8 @@ def ac_worker_thread(air_conditioner: SamsungAC):
             case 1:
                 if not air_conditioner.is_connected:
                     logging.error("Fail to connect to AC %s", air_conditioner.friendly_name)
-                    logging.info("Retrying connection in 5s")
-                    time.sleep(5)
+                    logging.info("Retrying connection in 5min")
+                    time.sleep(300)
                     thread_state = 0
                     continue
                 thread_state += 1
