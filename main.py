@@ -163,7 +163,6 @@ class SamsungAC:
     work_modes = ['Auto', 'Cool', 'Dry', 'Wind', 'Heat']
     wind_modes = ['Auto', 'Low', 'Mid', 'High', 'Turbo']
 
-
     def __init__(self, ip_address: str, duid, token='', base_topic: str = '/AC/', friendly_name: str = None,
                  mqtt_broker: str = 'mqtt.agalliazzo.com'):
         """
